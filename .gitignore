@@ -3,5 +3,6 @@ build/*
 devel/*
 src/read_pcd/PCDFiles/*
 .vscode/*
+.clang-format
 
 
