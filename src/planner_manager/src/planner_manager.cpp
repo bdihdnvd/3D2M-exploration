@@ -5,16 +5,6 @@
 #include <random>
 #include <time.h>
 
-#define COORDS_FILE "/home/lantern/ROS_workspace/diablo-planner/data/corrds.txt"
-#define TRAJS_FILE  "/home/lantern/ROS_workspace/diablo-planner/data/trajs.txt"
-#define TIMES_FILE  "/home/lantern/ROS_workspace/diablo-planner/data/times.txt"
-#define CURVE_FILE  "/home/lantern/ROS_workspace/diablo-planner/data/curve.txt"
-
-#define NORMAL
-// #define BENCHMARK100
-// #define BENCHMARKTIME
-
-
 ofstream coords_writer, trajs_writer;
 
 void PlannerManager::init(ros::NodeHandle& nh)
@@ -38,12 +28,10 @@ void PlannerManager::init(ros::NodeHandle& nh)
 
   (pcsmap_manager->travelcost_map) -> truncation_dis = truncation_dis;
 
-
   
   odom_sub      = nh.subscribe("odom", 1, &PlannerManager::odomRcvCallBack, this);
   target_sub    = nh.subscribe("/goal",1, &PlannerManager::targetRcvCallBack, this);
   target_sub2    = nh.subscribe("/anchor_3D_goal",10, &PlannerManager::target2RcvCallBack, this );
-  benchmark_run_sub  = nh.subscribe("/run_benchmark_traj", 1 , &PlannerManager::rcvBenchmarkRun, this); 
 
   path_vis_pub  = nh.advertise<visualization_msgs::Marker>("path_vis", 10);
   traj_vis_pub  = nh.advertise<visualization_msgs::Marker>("traj_vis", 10000);
@@ -92,122 +80,6 @@ void PlannerManager::mapRcvCallBack(const std_msgs::Empty& msg)
     cout<<"init map A*-"<<endl;
 }
 
-
-//这两个函数一起可以读取文件中某一特定行，行数line从1开始，Readline返回值为string类型
-int CountLines(string filename)
-{
-    ifstream ReadFile;
-    int n=0;
-    string tmp;
-    ReadFile.open(filename.c_str(),ios::in);//ios::in 表示以只读的方式读取文件
-    if(ReadFile.fail())//文件打开失败:返回0
-    {
-        return 0;
-    }
-    else//文件存在
-    {
-        while(getline(ReadFile,tmp,'\n'))
-        {
-            n++;
-        }
-        ReadFile.close();
-        return n;
-    }
-}
- 
-string ReadLine(string filename,int line)
-{
-    int lines,i=0;
-    string temp;
-    fstream file;
-    file.open(filename.c_str(), ios::in);
-    lines = CountLines(filename);
- 
-    if(line<=0)
-    {
-        return "Error 1: 行数错误，不能为0或负数。";
-    }
-    if(file.fail())
-    {
-        return "Error 2: 文件不存在。";
-    }
-    if(line > lines)
-    {
-        return "Error 3: 行数超出文件长度。";
-    }
-    while(getline(file,temp) && i < line-1)
-    {
-        i++;
-    }
-    file.close();
-    return temp;
-}
-
-void PlannerManager::rcvBenchmarkRun(const std_msgs::Int16 msg)
-{
-  int item = msg.data;
-  cout<<"[Planner Manager] 准备执行第 " << item <<" 条benchmark轨迹 "<<endl;
-  
-  string data_line = ReadLine(COORDS_FILE, item);
-  string data;
-  vector<string> datas;
-  stringstream line(data_line);
-  while(line >> data)
-        datas.push_back(data);
-    //输出data
-  for(int i = 0; i < datas.size() ; i++)
-  {
-        cout<<datas[i]<<endl;
-  }
-  Vector3d begin_pos, begin_vel;
-  vector<double> T;
-  vector<Eigen::Matrix<double, 3, 6>> cMats;
-  Eigen::Matrix<double, 3, 6> cMat;
-
-  begin_pos(0) = stod( datas[0] );
-  begin_pos(1) = stod( datas[1] );
-  begin_pos(2) = stod( datas[2] );
-
-  data_line = ReadLine(TRAJS_FILE, item);
-  stringstream line2(data_line);
-  datas.clear();
-  while(line2 >> data) {
-        datas.push_back(data);
-  }
-
-  int traj_pieces  = stoi( datas[0] );
-  int index = 1;
-
-  for(int i = 0 ; i < traj_pieces ; i++) {
-    T.push_back( stod(datas[index++] ));
-    for( int a = 0 ; a < 3 ; a++ )
-    {
-      for(int b = 0 ; b < 6 ; b++)
-      {
-        cMat(a,b) = stod( datas[ index++ ] );
-      }
-    }
-    cMats.push_back( cMat );
-  }
-
-
-  Trajectory traj;
-  traj.reserve(traj_pieces);
-
-  for (int i = 0; i < traj_pieces; i++) {
-      traj.emplace_back(T[i], cMats[i] );
-  }
-  recent_traj = traj;
-  begin_vel = recent_traj.getVel(0.4);
-
-  renderTraj(recent_traj);
-  pubFlash( begin_pos , begin_vel);
-  pubStop();
-
-  ros::Duration(3).sleep();
-  publishTraj();
-}
-
 void PlannerManager::pubStop()
 {
   geometry_msgs::Pose cmd_geo;
@@ -219,296 +91,74 @@ void PlannerManager::pubStop()
 
 void PlannerManager::targetRcvCallBack(const geometry_msgs::PoseStamped& msg)
 {
+  Vector3d begin_pos;
+  Vector3d target_pos;
 
-    Vector3d begin_pos;
-    Vector3d target_pos;
-    
-    Vector3d begin_vel;
-    Vector3d target_vel;
+  Vector3d begin_vel;
+  Vector3d target_vel;
 
-    int ret_value;
+  int ret_value;
 
+  target_pos(0) = msg.pose.position.x;
+  target_pos(1) = msg.pose.position.y;
+  target_pos(2) = msg.pose.position.z;
 
-#ifdef NORMAL
+  Quaterniond q(msg.pose.orientation.w,
+                msg.pose.orientation.x,
+                msg.pose.orientation.y,
+                msg.pose.orientation.z);
 
-    target_pos(0) = msg.pose.position.x;
-    target_pos(1) = msg.pose.position.y;
-    target_pos(2) = msg.pose.position.z;
+  Matrix3d R(q);
+  double target_yaw = atan2(R.col(0)[1], R.col(0)[0]);
 
-    Quaterniond    q(	msg.pose.orientation.w,
-							    	  msg.pose.orientation.x,
-							    	  msg.pose.orientation.y,
-							    	  msg.pose.orientation.z  );
+  target_vel(0) = cos(target_yaw);
+  target_vel(1) = sin(target_yaw);
+  target_vel(2) = 0;
 
-		Matrix3d       R(q);
-		double target_yaw 	= atan2(R.col(0)[1],R.col(0)[0]);    
+  target_vel.normalize();
+  target_vel *= 0.01;
 
-    target_vel(0) = cos(target_yaw);
-    target_vel(1) = sin(target_yaw);
-    target_vel(2) = 0;
+  // 6.39, -9.77, 21.7
 
-    target_vel.normalize();
-    target_vel *= 0.01;
+  // cout<<"tr_cost = " << (pcsmap_manager->travelcost_map) -> getSDFValue(target_pos)<<endl;
+  // cout<<"tr_grad = " << (pcsmap_manager->travelcost_map) -> getSDFGrad(target_pos)<<endl;
+  double sdf_cost = (pcsmap_manager->occupancy_map)->getSDFValue(target_pos);
+  cout << "sdf_cost = " << sdf_cost << endl;
+  cout << "sdf_grad = " << (pcsmap_manager->occupancy_map)->getSDFGrad(target_pos) << endl;
+  // Vector3d up_normal = Vector3d(0,0,1);
+  // cout<<"plane_cost = " << 1 - up_normal.transpose() * (pcsmap_manager->travelcost_map) -> getTravelPN(target_pos)<<endl;
 
-    //6.39, -9.77, 21.7
+  pcsmap_manager->dropPoint(target_pos);
+  cout << "target = " << target_pos << endl;
 
-    //cout<<"tr_cost = " << (pcsmap_manager->travelcost_map) -> getSDFValue(target_pos)<<endl;
-    //cout<<"tr_grad = " << (pcsmap_manager->travelcost_map) -> getSDFGrad(target_pos)<<endl;
-    double sdf_cost = (pcsmap_manager->occupancy_map) -> getSDFValue(target_pos);
-    cout<<"sdf_cost = " << sdf_cost <<endl;
-    cout<<"sdf_grad = " << (pcsmap_manager->occupancy_map) -> getSDFGrad(target_pos)<<endl;
-    //Vector3d up_normal = Vector3d(0,0,1);
-    //cout<<"plane_cost = " << 1 - up_normal.transpose() * (pcsmap_manager->travelcost_map) -> getTravelPN(target_pos)<<endl;
+  if (has_odom)
+  {
+    begin_pos(0) = recent_odom.pose.pose.position.x;
+    begin_pos(1) = recent_odom.pose.pose.position.y;
+    begin_pos(2) = recent_odom.pose.pose.position.z + 1.0;
+    // begin_pos(2) = recent_odom.pose.pose.position.z;
 
-    pcsmap_manager -> dropPoint(target_pos);
-    cout<<"target = " <<target_pos<<endl;
+    begin_vel(0) = 0;
+    begin_vel(1) = 0;
+    begin_vel(2) = 0;
 
-    if(has_odom)
+    // begin_vel(0) = recent_odom.twist.twist.linear.x;
+    // begin_vel(1) = recent_odom.twist.twist.linear.y;
+    // begin_vel(2) = 0;
+
+    // begin_pos(0) = -4.37;
+    // begin_pos(1) = -13.1;
+    // begin_pos(2) = 11.61;
+    pcsmap_manager->dropPoint(begin_pos);
+    ros::Time before_planning = ros::Time::now();
+    if (generatePath(begin_pos, target_pos))
     {
-      begin_pos(0) = recent_odom.pose.pose.position.x;
-      begin_pos(1) = recent_odom.pose.pose.position.y;
-      begin_pos(2) = recent_odom.pose.pose.position.z + 1.0;
-      // begin_pos(2) = recent_odom.pose.pose.position.z;
-
-      begin_vel(0) = 0;
-      begin_vel(1) = 0;
-      begin_vel(2) = 0;
-
-      // begin_vel(0) = recent_odom.twist.twist.linear.x;
-      // begin_vel(1) = recent_odom.twist.twist.linear.y;
-      // begin_vel(2) = 0;
-
-      // begin_pos(0) = -4.37;
-      // begin_pos(1) = -13.1;
-      // begin_pos(2) = 11.61;
-      pcsmap_manager -> dropPoint(begin_pos);
-      ros::Time before_planning = ros::Time::now();
-      if( generatePath( begin_pos, target_pos ) )
-      {
-        generateTraj(recent_path, begin_vel, target_vel,ret_value);
-      }
-
-      ros::Time after_planning = ros::Time::now();
-      std::cout<<"[Planner Manager] total cost = " << 1000*(after_planning.toSec() - before_planning.toSec())<<"ms"<<std::endl;
+      generateTraj(recent_path, begin_vel, target_vel, ret_value);
     }
 
-#endif
-
-#ifdef BENCHMARK100
-
-
-    coords_writer.open(COORDS_FILE);
-    trajs_writer.open(TRAJS_FILE);
-
-    srand(time(0));
-    int times = 100;
-    int total_times = 0;
-    int x_size  = floor(10*( pcsmap_manager -> boundary_xyzmax(0) - pcsmap_manager -> boundary_xyzmin(0) ));
-    int y_size  = floor(10*( pcsmap_manager -> boundary_xyzmax(1) - pcsmap_manager -> boundary_xyzmin(1) ));
-    int z_value = floor( (pcsmap_manager -> boundary_xyzmax(2)) );
-    int x_begin = 10 * ceil(pcsmap_manager -> boundary_xyzmin(0));
-    int y_begin = 10 * ceil(pcsmap_manager -> boundary_xyzmin(1));
-    while( times-- ){
-      
-      total_times++;
-      if(total_times > 1000){
-        std::cout<<" [benchmark100] 重试次数达到最大值，终止。 "<<std::endl;
-        break;
-      }
-      std::cout<<" [benchmark100] 执行第 "<< 101 - times <<" 次 benchmark "<<std::endl;
-      begin_pos(0) = 0.1 * ( rand() % x_size + x_begin );
-      begin_pos(1) = 0.1 * ( rand() % y_size + y_begin );
-      begin_pos(2) = z_value;
-
-      // begin_pos(0) = msg.pose.position.x;
-      // begin_pos(1) = msg.pose.position.y;
-      // begin_pos(2) = msg.pose.position.z;
-
-      begin_vel(0) = 0;
-      begin_vel(1) = 0;
-      begin_vel(2) = 0;
-
-      target_pos(0) = 0.1 * ( rand() % x_size + x_begin );
-      target_pos(1) = 0.1 * ( rand() % y_size + y_begin );
-      target_pos(2) = z_value;
-
-      target_vel(0) = 0;
-      target_vel(1) = 0;
-      target_vel(2) = 0;
-
-      
-
-      pcsmap_manager -> dropPoint(begin_pos);
-      pcsmap_manager -> dropPoint(target_pos);
-
-      if( (begin_pos - target_pos).norm() < 5 ){ 
-        std::cout<<" [benchmark100] 起点距离终点太近，重新执行。 "<<std::endl;
-        times++; continue; 
-      }
-
-      vector<Vector3d> pts;
-      pts.push_back( begin_pos );
-      pts.push_back( target_pos );
-
-      renderPoints(pts, Vector3d(1,1,0) , 2.0, 1);
-
-
-
-      if( generatePath( begin_pos, target_pos ) )
-      {
-        renderPath(recent_path);
-        generateTraj(recent_path, begin_vel, target_vel, ret_value);
-        if( ret_value < 0){
-          std::cout<<" [benchmark100] 优化失败，重新执行。 "<<std::endl;
-          times++;
-          continue;
-        }
-        else{
-          renderTraj(recent_traj);
-          std::cout<<" [benchmark100] 成功，写入文件。 "<<std::endl;
-          coords_writer.precision(15); 
-          trajs_writer.precision(15); 
-          coords_writer << begin_pos(0) << " " << begin_pos(1) <<" " << begin_pos(2) <<" "<< target_pos(0) << " " << target_pos(1) <<" " << target_pos(2) << endl;
-          trajs_writer << recent_traj.getPieceNum() <<" ";
-          for( int i = 0 ; i < recent_traj.getPieceNum() ; i++)
-          {
-              Piece piece = recent_traj[i];
-              Eigen::Matrix<double, 3, 6> cofmat = piece.getCoeffMat();
-              trajs_writer << piece.getDuration() <<" ";
-              for( int a = 0 ; a < 3 ; a++ )
-              {
-                for(int b = 0 ; b < 6 ; b++)
-                {
-                  trajs_writer << cofmat(a,b) <<" ";
-                }
-              }
-          }
-          trajs_writer << endl;
-        }
-      }
-      else 
-      {
-        std::cout<<" [benchmark100] 前端失败，重新执行。 "<<std::endl;
-        times++;
-        continue;
-      }
-
-
-    }
-
-#endif
-
-#ifdef BENCHMARKTIME
-
-    // coords_writer.open(TIMES_FILE);    
-    coords_writer.open(CURVE_FILE);
-    // trajs_writer.open(COORDS_FILE);
-
-    srand(time(0));
-    int times = 2000;
-    int total_times = 0;
-    int x_size  = floor(10*( pcsmap_manager -> boundary_xyzmax(0) - pcsmap_manager -> boundary_xyzmin(0) ));
-    int y_size  = floor(10*( pcsmap_manager -> boundary_xyzmax(1) - pcsmap_manager -> boundary_xyzmin(1) ));
-    int z_size  = floor(10*( pcsmap_manager -> boundary_xyzmax(2) - pcsmap_manager -> boundary_xyzmin(2) ));
-    int x_begin = 10 * ceil(pcsmap_manager -> boundary_xyzmin(0));
-    int y_begin = 10 * ceil(pcsmap_manager -> boundary_xyzmin(1));
-    int z_begin = 10 * ceil(pcsmap_manager -> boundary_xyzmin(2));
-    while( times-- ){
-      
-      total_times++;
-      if(total_times > 10000){
-        std::cout<<" [benchmark time] 重试次数达到最大值，终止。 "<<std::endl;
-        break;
-      }
-      std::cout<<" [benchmark time] 执行第 "<< 2001 - times <<" /2000次 benchmark "<<std::endl;
-      begin_pos(0) = 0.1 * ( rand() % x_size + x_begin );
-      begin_pos(1) = 0.1 * ( rand() % y_size + y_begin );
-      begin_pos(2) = 0.1 * ( rand() % z_size + z_begin );
-
-
-      begin_vel(0) = 0;
-      begin_vel(1) = 0;
-      begin_vel(2) = 0;
-
-      target_pos(0) = 0.1 * ( rand() % x_size + x_begin );
-      target_pos(1) = 0.1 * ( rand() % y_size + y_begin );
-      target_pos(2) = 0.1 * ( rand() % z_size + z_begin );
-
-      target_vel(0) = 0;
-      target_vel(1) = 0;
-      target_vel(2) = 0;
-
-      
-      pcsmap_manager -> dropPoint(begin_pos);
-      pcsmap_manager -> dropPoint(target_pos);
-
-      if( (begin_pos - target_pos).norm() < 5 ){ 
-        std::cout<<" [benchmark time] 起点距离终点太近，重新执行。 "<<std::endl;
-        times++; continue; 
-      }
-
-      vector<Vector3d> pts;
-      pts.push_back( begin_pos );
-      pts.push_back( target_pos );
-
-      renderPoints(pts, Vector3d(1,1,0) , 2.0, 1);
-
-      // trajs_writer.precision(15); 
-      // trajs_writer << begin_pos(0) << " " << begin_pos(1) <<" " << begin_pos(2) <<" "<< target_pos(0) << " " << target_pos(1) <<" " << target_pos(2) << endl;
-
-      ros::Time before_planning = ros::Time::now();
-
-      if( generatePath( begin_pos, target_pos ) )
-      {
-
-        generateTraj(recent_path, begin_vel, target_vel, ret_value);
-        if( ret_value < 0){
-          std::cout<<" [benchmark time] 优化失败，重新执行。 "<<std::endl;
-          times++;
-          continue;
-        }
-        else{
-          ros::Time after_planning = ros::Time::now();
-          double time_ms = 1000*(after_planning.toSec() - before_planning.toSec());
-          double length;
-          renderPath(recent_path);
-          length = renderTraj(recent_traj);
-          std::cout<<" [benchmark time] 成功，写入文件。 "<<std::endl;
-          cout<<"长度="<<length<<endl;
-          coords_writer.precision(15);
-          // coords_writer <<length<<" "<<time_ms*0.3<< endl;
-
-          //计算平均曲率
-          double t_duration = recent_traj.getTotalDuration();
-          int point_count = 0;
-          Eigen::Vector3d pos, pos_pre;
-          double d_theta, distance;
-          double final_c = 0;
-          for(double t = 0; t < t_duration - 0.05; t += 0.05)
-          {
-              pos     = recent_traj.getPos(t);
-              pos_pre = recent_traj.getPos(t+0.05);
-              d_theta = abs( atan2(pos_pre(1), pos_pre(0)) - atan2(pos(1), pos(0)));
-              distance = (pos_pre - pos).head(2).norm();
-              final_c += d_theta / distance;
-              point_count++;
-          }
-          final_c /= point_count;
-          coords_writer <<final_c<<endl;
-        }
-      }
-      else 
-      {
-        std::cout<<" [benchmark time] 前端失败，重新执行。 "<<std::endl;
-        times++;
-        continue;
-      }
-
-
-    }
-#endif
-
-
+    ros::Time after_planning = ros::Time::now();
+    std::cout << "[Planner Manager] total cost = " << 1000 * (after_planning.toSec() - before_planning.toSec()) << "ms" << std::endl;
+  }
 }
 
 void PlannerManager::target2RcvCallBack(const geometry_msgs::PoseStamped& msg)
@@ -809,9 +459,7 @@ double PlannerManager::renderTraj( Trajectory traj)
 //     traj_vis_pub.publish(traj_des_vis);
 // }
 
-#ifdef NORMAL
-    // ros::Duration(0.001).sleep();
-#endif
+  // ros::Duration(0.001).sleep();
 
   }
 

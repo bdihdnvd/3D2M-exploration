@@ -33,7 +33,6 @@ class PlannerManager
     void targetRcvCallBack(const geometry_msgs::PoseStamped& msg);
     void target2RcvCallBack(const geometry_msgs::PoseStamped& msg);
 
-    void rcvBenchmarkRun(const std_msgs::Int16 msg);
     void odomRcvCallBack(const nav_msgs::Odometry& msg);
 
     // point correction, for ground vehicle
