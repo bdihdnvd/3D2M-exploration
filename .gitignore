@@ -2,7 +2,13 @@ Unity_proj/*
 build/*
 devel/*
 src/read_pcd/PCDFiles/*
+
+# for vscode
 .vscode/*
+
+# for clangd
 .clang-format
+.clangd/*
+compile_commands.json
 
 
