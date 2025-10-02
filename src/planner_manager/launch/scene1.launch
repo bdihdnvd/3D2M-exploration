@@ -58,11 +58,18 @@
 
 <!-- use simulator -->
 
-    <include file="$(find fake_diablo)/launch/fake_diablo.launch">
+    <!-- <include file="$(find fake_diablo)/launch/fake_diablo.launch">
 		<arg name="odometry_topic"  value="$(arg odom_topic)"/>
 		<arg name="init_x"  value="-10.0"/>
 		<arg name="init_y"  value="-1.0"/>
-	</include>
+	</include> -->
+
+    <!-- trajectory server: directly write odom along /trajectory -->
+    <node pkg="planner_manager" name="traj_server" type="traj_server" output="screen">
+      <remap from="~trajectory_topic" to="/trajectory" />
+      <remap from="~odom" to="$(arg odom_topic)" />
+      <remap from="~odom_out" to="$(arg odom_topic)" />
+    </node>
 
 <!-- use program code globalmap generator -->
 	<!-- <include file="$(find globalmap_gene)/launch/globalmap_gene.launch"/> -->

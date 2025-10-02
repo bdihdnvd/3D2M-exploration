@@ -10,13 +10,17 @@ using namespace Eigen;
 
 ros::Publisher despoint_vis_pub;
 ros::Publisher despoint_pub;
-ros::Publisher control_cmd_pub;
+ros::Publisher odom_out_pub;
 
 double dt = 0.1;
 double t_cur;
 
 bool has_traj = false;
 bool has_odom = false;
+bool publish_odom_only = true; // if true, ignore control, directly write odom along trajectory
+std::string odom_frame_id = "world";
+bool seed_odom_on_start = true;
+double seed_x = 0.0, seed_y = 0.0, seed_z = 1.0;
 
 Trajectory trajectory;
 minco::MinJerkOpt jerkOpt_;
@@ -124,13 +128,23 @@ double err_yaw( double des_yaw, double odom_yaw)
 
 void cmdCallback(const ros::TimerEvent &e)
 {
+    if (!has_odom && seed_odom_on_start)
+    {
+      nav_msgs::Odometry odom;
+      odom.header.stamp = ros::Time::now();
+      odom.header.frame_id = odom_frame_id;
+      odom.pose.pose.position.x = seed_x;
+      odom.pose.pose.position.y = seed_y;
+      odom.pose.pose.position.z = seed_z;
+      odom.pose.pose.orientation.w = 1.0;
+      odom_out_pub.publish(odom);
+    }
+
     if ((!has_traj) || (!has_odom))
       return;
     
     ros::Time time_now  = ros::Time::now();
     t_cur               = (time_now - start_time).toSec();
-
-    geometry_msgs::Pose cmd;
 
     if (t_cur < traj_duration && t_cur >= 0.0)
     {
@@ -140,45 +154,51 @@ void cmdCallback(const ros::TimerEvent &e)
       Vector2d des_velxy   = Vector2d(des_vel(0), des_vel(1));
       tempRenderAPoint(des_pos, Vector3d(0.1,0.2,0.9) );
     
-      double des_yawdot  =  (des_acc(1) * des_vel(0) - des_acc(0) * des_vel(1)) / (des_velxy.squaredNorm());
+      double des_yaw = atan2(des_vel(1), des_vel(0));
+      double des_yawdot = 0.0;
+      if (des_velxy.squaredNorm() > 1e-6)
+        des_yawdot  =  (des_acc(1) * des_vel(0) - des_acc(0) * des_vel(1)) / (des_velxy.squaredNorm());
 
-      Vector3d err_pos   = des_pos - odometry_pos;
-
-      double des_yaw     = atan2(err_pos(1), err_pos(0));
-      Vector3d err_vel   = des_vel - odometry_vel;
-      Vector2d err_posxy = Vector2d(err_pos(0), err_pos(1));
-      Vector2d err_velxy = Vector2d(err_vel(0), err_vel(1));
-      Vector2d forward_dir = Vector2d( cos(odometry_yaw) , sin(odometry_yaw) );
-
-      double ef  = forward_dir.dot(err_posxy);
-      double def = forward_dir.dot(err_velxy);
-
-      double forward_speed = des_velxy.norm() + ( 5 * ef + 0.5 * def );
-      double ori_speed     = des_yawdot + (4 * err_yaw(des_yaw , odometry_yaw) );
-      double vertical_speed = des_vel(2) + (2 * (des_pos(2) - odometry_pos(2)));
-      // if(ori_speed > 5)
-      // {
-      //   cout<<"dyd = " << des_yawdot <<" | dy = " << des_yaw << "  | odom_yaw = " << odometry_yaw <<endl;
-      // }
-
-      double L = 0.5;
-      cmd.position.x  =  (forward_speed - L * ori_speed) / 2;
-      cmd.position.y =  (forward_speed + L * ori_speed) / 2;
-      cmd.position.z     =  vertical_speed;
-      cmd.orientation.z  =  des_pos(2) - 0.7;
-
-      control_cmd_pub.publish(cmd);
+      if (publish_odom_only)
+      {
+        nav_msgs::Odometry odom;
+        odom.header.stamp = ros::Time::now();
+        odom.header.frame_id = odom_frame_id;
+        odom.pose.pose.position.x = des_pos(0);
+        odom.pose.pose.position.y = des_pos(1);
+        odom.pose.pose.position.z = des_pos(2);
+        Eigen::AngleAxisd yaw_aa(des_yaw, Eigen::Vector3d::UnitZ());
+        Eigen::Quaterniond q(yaw_aa);
+        odom.pose.pose.orientation.w = q.w();
+        odom.pose.pose.orientation.x = q.x();
+        odom.pose.pose.orientation.y = q.y();
+        odom.pose.pose.orientation.z = q.z();
+        odom.twist.twist.linear.x = des_vel(0);
+        odom.twist.twist.linear.y = des_vel(1);
+        odom.twist.twist.linear.z = des_vel(2);
+        odom.twist.twist.angular.z = des_yawdot;
+        odom_out_pub.publish(odom);
+      }
     }
 
     else if(t_cur >= traj_duration)
     {
-      Vector3d des_pos   = trajectory.getPos(traj_duration);
-      cmd.position.x  =  0;
-      cmd.position.y  =  0;
-      cmd.position.z  =  0;
-      cmd.orientation.z  =  des_pos(2) - 0.7;
-
-      control_cmd_pub.publish(cmd);
+      if (publish_odom_only)
+      {
+        Vector3d des_pos   = trajectory.getPos(traj_duration);
+        nav_msgs::Odometry odom;
+        odom.header.stamp = ros::Time::now();
+        odom.header.frame_id = odom_frame_id;
+        odom.pose.pose.position.x = des_pos(0);
+        odom.pose.pose.position.y = des_pos(1);
+        odom.pose.pose.position.z = des_pos(2);
+        Eigen::Quaterniond q(Eigen::AngleAxisd(0.0, Eigen::Vector3d::UnitZ()));
+        odom.pose.pose.orientation.w = q.w();
+        odom.pose.pose.orientation.x = q.x();
+        odom.pose.pose.orientation.y = q.y();
+        odom.pose.pose.orientation.z = q.z();
+        odom_out_pub.publish(odom);
+      }
     }
 
 }
@@ -190,13 +210,17 @@ int main(int argc, char **argv)
 {
   ros::init(argc, argv, "traj_server");
   ros::NodeHandle nh("~");
+  nh.param("seed_odom_on_start", seed_odom_on_start, true);
+  nh.param("seed_x", seed_x, 0.0);
+  nh.param("seed_y", seed_y, 0.0);
+  nh.param("seed_z", seed_z, 1.0);
 
   ros::Subscriber traj_sub      = nh.subscribe("trajectory_topic", 10, polynomialTrajCallback);
   ros::Subscriber odom_sub      = nh.subscribe("odom", 1, rcvOdomCallBack );
 
   despoint_pub      = nh.advertise<geometry_msgs::PoseStamped>("despoint", 20); 
   despoint_vis_pub  = nh.advertise<visualization_msgs::Marker>("point/vis", 20); 
-  control_cmd_pub   = nh.advertise<geometry_msgs::Pose>("controller_cmd", 20); 
+  odom_out_pub   = nh.advertise<nav_msgs::Odometry>("odom_out", 20); 
 
   ros::Timer cmd_timer = nh.createTimer(ros::Duration(0.01), cmdCallback);
 
