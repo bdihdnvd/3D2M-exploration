@@ -16,6 +16,7 @@
 #include <pcl/sample_consensus/ransac.h>
 #include <pcl/segmentation/sac_segmentation.h>
 #include <pcl/sample_consensus/sac_model_plane.h>
+#include <pcl/filters/voxel_grid.h>
 #include <string.h>
 
 #define INF 0x7fffffff
@@ -300,8 +301,20 @@ class PCSmapManager
   ros::Publisher costmap_vis_pub;
   ros::Publisher voxel_vis_pub;
   ros::Publisher rcvmap_signal_pub;
+  ros::Publisher travelmap_vis_pub;
 
   ros::Publisher debug_grad_pub;
+
+  // visualization controls
+  ros::Timer vis_timer;
+  double vis_rate_hz = 2.0;
+
+  // cached clouds for continuous republish
+  sensor_msgs::PointCloud2 cached_globalmap_vis;
+  sensor_msgs::PointCloud2 cached_gridmap_vis;
+  sensor_msgs::PointCloud2 cached_costmap_vis;
+
+  void onVisTimer(const ros::TimerEvent&);
 
  public:
   typedef shared_ptr<PCSmapManager> Ptr;

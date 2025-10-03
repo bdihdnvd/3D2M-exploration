@@ -76,8 +76,13 @@ void PCSmapManager::init(ros::NodeHandle &nh)
   costmap_vis_pub = nh.advertise<sensor_msgs::PointCloud2>("costmap_vis", 10);
   voxel_vis_pub = nh.advertise<sensor_msgs::PointCloud2>("voxel_vis", 10);
   rcvmap_signal_pub = nh.advertise<std_msgs::Empty>("rcvmap_signal", 10);
+  travelmap_vis_pub = nh.advertise<sensor_msgs::PointCloud2>("travelmap_vis", 10);
 
   debug_grad_pub = nh.advertise<sensor_msgs::PointCloud2>("grad_vis", 10);
+
+  nh.param("vis_rate_hz", vis_rate_hz, 2.0);
+  if (vis_rate_hz > 0)
+    vis_timer = nh.createTimer(ros::Duration(1.0 / vis_rate_hz), &PCSmapManager::onVisTimer, this);
 }
 
 pcl::PointCloud<pcl::PointXYZ> PCSmapManager::snowProj(const sensor_msgs::PointCloud2 &globalmap)
@@ -475,7 +480,7 @@ void PCSmapManager::rcvGlobalMapHandler(const sensor_msgs::PointCloud2& globalma
 
   // PR STEP 可视化点云地图
   globalmap_vis.header.frame_id = "world";
-  globalmap_vis_pub.publish(globalmap_vis);
+  cached_globalmap_vis = globalmap_vis;
 
   // STEP4 生成ESDF地图
   // generate occupancy ESDF map
@@ -765,8 +770,8 @@ void PCSmapManager::rcvGlobalMapHandler(const sensor_msgs::PointCloud2& globalma
     pcl::toROSMsg(gridmap_vis, occupancy_map_vis);
     cost_cloud_vis.header.frame_id = "world";
     occupancy_map_vis.header.frame_id = "world";
-    costmap_vis_pub.publish(cost_cloud_vis);
-    gridmap_vis_pub.publish(occupancy_map_vis);
+    cached_costmap_vis = cost_cloud_vis;
+    cached_gridmap_vis = occupancy_map_vis;
 
     ///////////////////////////////////////////////
 
@@ -856,6 +861,104 @@ void PCSmapManager::rcvGlobalMapHandler(const sensor_msgs::PointCloud2& globalma
     std_msgs::Empty s;
     rcvmap_signal_pub.publish(s);
     
+}
+
+void PCSmapManager::onVisTimer(const ros::TimerEvent&)
+{
+  // continuous re-publish of cached clouds with downsampling for globalmap
+  if (cached_globalmap_vis.data.size() > 0)
+  {
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_in(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_filtered(new pcl::PointCloud<pcl::PointXYZ>);
+    pcl::fromROSMsg(cached_globalmap_vis, *cloud_in);
+    
+    pcl::VoxelGrid<pcl::PointXYZ> voxel_filter;
+    voxel_filter.setInputCloud(cloud_in);
+    voxel_filter.setLeafSize(0.1, 0.1, 0.1);
+    voxel_filter.filter(*cloud_filtered);
+    
+    sensor_msgs::PointCloud2 downsampled_globalmap;
+    pcl::toROSMsg(*cloud_filtered, downsampled_globalmap);
+    downsampled_globalmap.header.frame_id = "world";
+    downsampled_globalmap.header.stamp = ros::Time::now();
+    globalmap_vis_pub.publish(downsampled_globalmap);
+  }
+  if (cached_gridmap_vis.data.size() > 0)
+  {
+    cached_gridmap_vis.header.stamp = ros::Time::now();
+    gridmap_vis_pub.publish(cached_gridmap_vis);
+  }
+  if (cached_costmap_vis.data.size() > 0)
+  {
+    cached_costmap_vis.header.stamp = ros::Time::now();
+    costmap_vis_pub.publish(cached_costmap_vis);
+  }
+
+  // 3D ESDF visualization using grid resolution
+  // 只可视化z=0.5平面上的ESDF
+  if (occupancy_map && occupancy_map->X_size > 0)
+  {
+    pcl::PointCloud<pcl::PointXYZI> esdf_cloud;
+    pcl::PointXYZI ip;
+    Vector3d pos;
+    double val;
+    double resolution = occupancy_map->grid_resolution;
+    double z_plane = 0.5;
+
+    // 只遍历z=0.5平面
+    for (double x = boundary_xyzmin(0); x < boundary_xyzmax(0); x += resolution)
+    {
+      for (double y = boundary_xyzmin(1); y < boundary_xyzmax(1); y += resolution)
+      {
+        pos = Vector3d(x, y, z_plane);
+        val = occupancy_map->getSDFValue(pos);
+
+        ip.x = x;
+        ip.y = y;
+        ip.z = 0;
+        ip.intensity = val;
+        esdf_cloud.push_back(ip);
+      }
+    }
+
+    sensor_msgs::PointCloud2 esdf_vis;
+    pcl::toROSMsg(esdf_cloud, esdf_vis);
+    esdf_vis.header.frame_id = "world";
+    esdf_vis.header.stamp = ros::Time::now();
+    voxel_vis_pub.publish(esdf_vis);
+  }
+
+  // 可通行图三维可视化 (travel cost map 3D)
+  if (travelcost_map && travelcost_map->X_size > 0)
+  {
+    pcl::PointCloud<pcl::PointXYZI> travel_cloud;
+    pcl::PointXYZI ip;
+    Vector3d pos;
+    double val;
+    double resolution = travelcost_map->grid_resolution;
+    double z_plane = 5;
+
+    for (double x = boundary_xyzmin(0); x < boundary_xyzmax(0); x += resolution)
+    {
+      for (double y = boundary_xyzmin(1); y < boundary_xyzmax(1); y += resolution)
+      {
+        pos = Vector3d(x, y, z_plane);
+        val = travelcost_map->getSDFValue(pos);  // 获取travel cost ESDF值
+
+        ip.x = x;
+        ip.y = y;
+        ip.z = z_plane;
+        ip.intensity = val;
+        travel_cloud.push_back(ip);
+      }
+    }
+
+    sensor_msgs::PointCloud2 travel_vis;
+    pcl::toROSMsg(travel_cloud, travel_vis);
+    travel_vis.header.frame_id = "world";
+    travel_vis.header.stamp = ros::Time::now();
+    travelmap_vis_pub.publish(travel_vis);
+  }
 }
 
 void PCSmapManager::dropPoint(Vector3d &point)
